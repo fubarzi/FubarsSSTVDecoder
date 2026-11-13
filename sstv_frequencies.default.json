@@ -1,0 +1,22 @@
+{
+  "25544": {
+    "checked_at": "2026-11-12T01:29:40.812808+00:00",
+    "downlinks": [
+      {
+        "frequency_mhz": 145.8,
+        "description": "Mode V Imaging",
+        "source": "SatNOGS DB"
+      },
+      {
+        "frequency_mhz": 437.55,
+        "description": "Mode U - SSTV - Robot-36",
+        "source": "SatNOGS DB"
+      },
+      {
+        "frequency_mhz": 437.8,
+        "description": "Mode U - SSTV",
+        "source": "SatNOGS DB"
+      }
+    ]
+  }
+}

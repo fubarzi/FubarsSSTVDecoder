@@ -1,0 +1,15 @@
+Fubar's SSTV Decoder includes the MMSSTV decoding engine by JE3HHT Makoto Mori.
+Decoded images are shown inside Fubars. No separate MMSSTV application is installed.
+
+The next page lets you skip components already installed. Existing components start
+unchecked; select them again if you want an update or reinstall.
+
+The installer can also open the separate VB-CABLE driver setup. VB-CABLE is made by
+VB-Audio: https://www.vb-cable.com/ . VB-CABLE is donationware; all contributions
+are welcome. Its original driver package is also kept in the installed VB-CABLE folder.
+
+The driver setup requests administrator permission. Restart Windows after installing
+the driver. Fubars selects "CABLE Output (VB-Audio Virtual Cable)" inside the software.
+Launch Fubars after the reboot. It sends SDR receiver audio to CABLE Input.
+
+Existing settings, received images, and downloaded satellite data are preserved.
