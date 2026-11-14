@@ -5,7 +5,7 @@
 [Setup]
 AppId={{39B1FD68-03EF-40C2-A88A-22ED5325A63F}
 AppName=Fubar's SSTV Decoder
-AppVersion=1.0.11
+AppVersion=1.0.12
 AppPublisher=Fubar's SSTV Decoder
 DefaultDirName={code:GetInstallDir}
 DefaultGroupName=Fubar's SSTV Decoder
@@ -67,7 +67,7 @@ var
 begin
   Result := FileExists(AddBackslash(WizardDirValue) + 'FubarsSSTVDecoder.exe') and
             LoadStringFromFile(AddBackslash(WizardDirValue) + 'VERSION.txt', InstalledVersion) and
-            (Trim(InstalledVersion) = '1.0.11');
+            (Trim(InstalledVersion) = '1.0.12');
 end;
 
 procedure CurPageChanged(CurPageID: Integer);

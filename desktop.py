@@ -150,6 +150,38 @@ def pass_paths(lines, now=None):
         return [], []
 
 
+def mapped_ground_paths(sources, now=None):
+    """Short past and future ground tracks for every mapped satellite."""
+    now = now or datetime.now(timezone.utc)
+    paths = {}
+    for item in sources:
+        try:
+            past = [position(item['lines'], now + timedelta(minutes=minute))
+                    for minute in range(-45, 1, 3)]
+            future = [position(item['lines'], now + timedelta(minutes=minute))
+                      for minute in range(0, 46, 3)]
+            paths[item['id']] = (past, future)
+        except Exception:
+            continue
+    return paths
+
+
+def footprint_ring(sat):
+    """Ground coordinates of a satellite's radio horizon."""
+    lat0, lon0, delta = map(math.radians,
+                           (sat['lat'], sat['lon'], sat['footprint_deg']))
+    ring = []
+    for bearing in range(0, 361, 3):
+        direction = math.radians(bearing)
+        latitude = math.asin(math.sin(lat0) * math.cos(delta) +
+                             math.cos(lat0) * math.sin(delta) * math.cos(direction))
+        longitude = lon0 + math.atan2(math.sin(direction) * math.sin(delta) * math.cos(lat0),
+                                      math.cos(delta) - math.sin(lat0) * math.sin(latitude))
+        ring.append({'lat': math.degrees(latitude),
+                     'lon': (math.degrees(longitude) + 180) % 360 - 180})
+    return ring
+
+
 class Desktop:
     def __init__(self, root):
         self.root = root
@@ -212,6 +244,11 @@ class Desktop:
         self.last_tle_key = None
         self.pass_calculating = False
         self.pass_request = 0
+        self.map_paths = {}
+        self.last_map_path_key = None
+        self.last_map_path_calc = 0
+        self.map_path_request = 0
+        self.map_path_calculating = False
         self.home_passes = []
         self.home_pass_sources = []
         self.last_home_pass_calc = 0
@@ -849,8 +886,10 @@ class Desktop:
         with self.app.lock:
             self.app.settings['tracked_satellites'] = tracked
             self.app.settings['selected_satellite'] = str(active)
-            self.app.settings['monitored_satellites'] = [str(item) for item in
-                self.app.settings.get('monitored_satellites', []) if str(item) in tracked]
+            previous_monitored = [str(item) for item in self.app.settings.get('monitored_satellites', [])]
+            self.app.settings['monitored_satellites'] = [item for item in previous_monitored if item in tracked]
+            if self.app.settings.get('auto_receive') and set(previous_monitored) == set(old_tracked):
+                self.app.settings['monitored_satellites'] = tracked.copy()
             if not self.app.settings['monitored_satellites']:
                 self.app.settings['auto_receive'] = False
             pass_choice = self.app.settings.get('pass_satellites')
@@ -1015,18 +1054,16 @@ class Desktop:
         self._change_monitored(False)
 
     def _auto_receive_changed(self):
-        added = None
+        added = []
         if self.auto_receive.get() and not self.app.settings.get('monitored_satellites'):
             tracked = [str(item) for item in self.app.settings.get('tracked_satellites', ['25544'])]
-            selected = str(self.app.settings.get('selected_satellite', '25544'))
             if tracked:
-                added = selected if selected in tracked else tracked[0]
+                added = tracked
                 with self.app.lock:
-                    self.app.settings['monitored_satellites'] = [added]
-                self._show_tracked_satellites(select_ids=[added])
+                    self.app.settings['monitored_satellites'] = tracked
+                self._show_tracked_satellites(select_ids=tracked)
         if self.save_settings() and added:
-            name = self.app.selected_tle(catalog_number=added)['name']
-            self._status(f'AUTO armed for {name}; radio starts and stops with its footprint')
+            self._status(f'AUTO armed for {len(added)} mapped satellite(s); decoded images save during passes')
 
     def _refresh_satellite_catalog(self):
         self.catalog_status_label.config(text='Updating satellite catalog…')
@@ -1730,10 +1767,11 @@ class Desktop:
 
     def arm_auto_receive(self):
         previous_mode = self.demod_combo.get()
-        selected = str(self.app.settings.get('selected_satellite', '25544'))
-        monitored = [str(item) for item in self.app.settings.get('monitored_satellites', [])]
-        if selected not in monitored:
-            monitored.append(selected)
+        monitored = list(dict.fromkeys(str(item) for item in
+                                       self.app.settings.get('tracked_satellites', ['25544'])))
+        if not monitored:
+            self._status('Add a satellite to the map before arming AUTO')
+            return
         with self.app.lock:
             self.app.settings['monitored_satellites'] = monitored
         self.auto_receive.set(True)
@@ -1747,8 +1785,13 @@ class Desktop:
         if self.app.receiver.running and previous_mode != 'FM':
             self.connect(recenter=True)
         self.app.last_auto_attempt = 0
-        self._show_tracked_satellites(select_ids=[selected])
-        self._status('AUTO armed · radio starts at Home footprint and stops when it leaves')
+        self._show_tracked_satellites(select_ids=monitored)
+        missing = sum(configured_sstv_frequency(self.app.settings, number) is None
+                      for number in monitored)
+        message = f'AUTO armed for {len(monitored)} mapped satellite(s) · decoded images save during Home passes'
+        if missing:
+            message += f' · choose SSTV frequencies for {missing}'
+        self._status(message)
 
     def stop_receiver(self):
         self.auto_receive.set(False)
@@ -1838,7 +1881,11 @@ class Desktop:
         stamp = datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S_%f')[:-3]
         mode_name = (self.mmsstv.mode if self.mmsstv and self.mmsstv.mode else 'SSTV')
         mode = ''.join(c for c in mode_name if c.isalnum() or c in ' -_').strip() or 'SSTV'
-        path = RECEIVED_DIR / f'ISS_{stamp}_{mode}.png'
+        active = (self.app.auto_active_satellite if self.app.auto_started else
+                  str(self.app.settings.get('selected_satellite', '25544')))
+        name = self.app.selected_tle(catalog_number=active).get('name', 'Satellite')
+        satellite = ''.join(c for c in name if c.isalnum() or c in ' -_').strip()[:40] or 'Satellite'
+        path = RECEIVED_DIR / f'{satellite}_{stamp}_{mode}.png'
         image.save(path)
         self.last_save = path
         self._refresh_image_thumbnails()
@@ -1922,6 +1969,11 @@ class Desktop:
                 if request == self.pass_request and key == self.last_tle_key:
                     self.pass_calculating = False
                     self.pass_current, self.pass_next = current, upcoming
+            elif kind == 'map_paths':
+                request, key, paths = value
+                if request == self.map_path_request and key == self.last_map_path_key:
+                    self.map_path_calculating = False
+                    self.map_paths = paths
             elif kind == 'home_passes':
                 request, key, passes = value
                 if request == self.home_pass_request and key == self.last_home_key:
@@ -2072,7 +2124,7 @@ class Desktop:
         tle = info['tle']
         lines = tle.get('lines', [])
         name = tle.get('name', 'Satellite')
-        self.map_title.config(text=f'{name.upper()} WORLD TRACKER   •   SOLID: NEXT PASS   •   DASHED: CURRENT PASS')
+        self.map_title.config(text='SATELLITES ON MAP   •   RINGS: RADIO COVERAGE   •   SOLID: FUTURE PATH   •   DASHED: PAST PATH')
         self.selected_satellite_label.config(text=f"Selected: {name} · NORAD {self.app.settings.get('selected_satellite', '25544')}")
         if valid_orbit(lines):
             epoch = orbit_epoch(lines)
@@ -2152,6 +2204,27 @@ class Desktop:
             threading.Thread(target=worker, daemon=True).start()
 
         tracked = [str(item) for item in cfg.get('tracked_satellites', ['25544'])]
+        map_sources = []
+        for catalog_number in dict.fromkeys(tracked):
+            item = self.app.selected_tle(catalog_number=catalog_number)
+            if valid_orbit(item.get('lines', [])):
+                map_sources.append({'id': catalog_number, 'lines': item['lines']})
+        map_key = tuple((item['id'], repr(item['lines'])) for item in map_sources)
+        if map_key != self.last_map_path_key:
+            self.map_paths = {}
+            self.last_map_path_key, self.last_map_path_calc = map_key, 0
+            self.map_path_calculating = False
+            self.map_path_request += 1
+        if (map_sources and not self.map_path_calculating and
+                (self.last_map_path_calc == 0 or time.time() - self.last_map_path_calc > 60)):
+            self.last_map_path_calc = time.time()
+            self.map_path_calculating = True
+            self.map_path_request += 1
+            request = self.map_path_request
+            def map_worker():
+                paths = mapped_ground_paths(map_sources)
+                self.device_results.put(('map_paths', (request, map_key, paths)))
+            threading.Thread(target=map_worker, daemon=True).start()
         chosen = cfg.get('pass_satellites')
         chosen = tracked if chosen is None else [str(item) for item in chosen if str(item) in tracked]
         pass_sources = []
@@ -2638,19 +2711,22 @@ class Desktop:
             draw.line((x0, y, x0 + width, y), fill=(190, 240, 220, 90))
         info = getattr(self, '_orbit_info', {})
         sat = info.get('iss')
+        active_id = str(self.app.settings.get('selected_satellite', '25544'))
+        monitored = {str(item) for item in self.app.settings.get('monitored_satellites', [])}
+        for item in info.get('tracked', []):
+            if item['id'] == active_id:
+                continue
+            color = ((75, 225, 255, 220) if item['id'] in monitored else
+                     (170, 195, 210, 190))
+            self._path(draw, footprint_ring(item['position']), width, height, x0, y0, color)
+            past, future = self.map_paths.get(item['id'], ([], []))
+            self._path(draw, past, width, height, x0, y0, color, dashed=True)
+            self._path(draw, future, width, height, x0, y0, color)
         if sat:
-            lat0, lon0, angle = sat['lat'], sat['lon'], sat['footprint_deg']
-            ring = []
-            for bearing in range(0, 361, 3):
-                lat1, lon1, br = map(math.radians, (lat0, lon0, bearing))
-                delta = math.radians(angle)
-                la = math.asin(math.sin(lat1)*math.cos(delta) + math.cos(lat1)*math.sin(delta)*math.cos(br))
-                lo = lon1 + math.atan2(math.sin(br)*math.sin(delta)*math.cos(lat1), math.cos(delta)-math.sin(lat1)*math.sin(la))
-                ring.append({'lat': math.degrees(la), 'lon': (math.degrees(lo)+180)%360-180})
-            self._path(draw, ring, width, height, x0, y0, (255, 215, 30, 240))
+            lat0, lon0 = sat['lat'], sat['lon']
+            self._path(draw, footprint_ring(sat), width, height, x0, y0, (255, 215, 30, 240))
         self._path(draw, self.pass_next, width, height, x0, y0, (70, 225, 255, 255))
         self._path(draw, self.pass_current, width, height, x0, y0, (30, 255, 160, 255), dashed=True)
-        active_id = str(self.app.settings.get('selected_satellite', '25544'))
         for item in info.get('tracked', []):
             if item['id'] == active_id:
                 continue

@@ -87,12 +87,11 @@ def configured_sstv_frequency(settings, catalog_number):
 
 
 def normalize_auto_monitor(settings):
-    """Arm the selected mapped satellite when auto receive has no monitor list."""
+    """Arm mapped satellites when auto receive has no monitor list."""
     if settings.get('auto_receive') and not settings.get('monitored_satellites'):
         tracked = [str(item) for item in settings.get('tracked_satellites', ['25544'])]
-        selected = str(settings.get('selected_satellite', '25544'))
         if tracked:
-            settings['monitored_satellites'] = [selected if selected in tracked else tracked[0]]
+            settings['monitored_satellites'] = tracked
     return settings
 
 

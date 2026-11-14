@@ -12,7 +12,7 @@ import numpy as np
 
 import core
 from core import TLE_FILE, doppler_shift_hz, read_json, sdrplay_if_reduction
-from desktop import pass_paths
+from desktop import pass_paths, mapped_ground_paths, footprint_ring
 from fm import (StreamingFMDemodulator, StreamingWFMDemodulator, StreamingHFDemodulator,
                 StreamingAudioNoiseFilter, StreamingSquelch, StreamingFrequencyShifter,
                 digital_shift_hz, make_demodulator)
@@ -163,6 +163,20 @@ def test_pass_paths():
     assert seconds_apart(before_current[0]['time'], current[0]['time']) < .01
     assert seconds_apart(before_next[0]['time'], after_current[0]['time']) < .01
     assert after_current[-1]['time'] == after_next[0]['time']
+
+
+def test_mapped_paths_and_rings():
+    lines = read_json(TLE_FILE, {})['lines']
+    now = datetime.now(timezone.utc)
+    paths = mapped_ground_paths([{'id': '25544', 'lines': lines}], now)
+    past, future = paths['25544']
+    assert len(past) == len(future) == 16
+    assert past[-1] == future[0]
+    assert datetime.fromisoformat(past[0]['time'].replace('Z', '+00:00')) < now
+    assert datetime.fromisoformat(future[-1]['time'].replace('Z', '+00:00')) > now
+    ring = footprint_ring(position(lines, now))
+    assert len(ring) == 121
+    assert all(-90 <= point['lat'] <= 90 and -180 <= point['lon'] <= 180 for point in ring)
 
 
 def test_home_passes():
@@ -345,11 +359,11 @@ def test_auto_receive_follows_footprint():
     assert not app.receiver.running and not app.auto_started
 
 
-def test_auto_receive_arms_selected_satellite_from_empty_list():
+def test_auto_receive_arms_mapped_satellites_from_empty_list():
     settings = {**core.DEFAULT_SETTINGS, 'auto_receive': True,
-                'tracked_satellites': ['25544'], 'selected_satellite': '25544',
+                'tracked_satellites': ['25544', '7530'], 'selected_satellite': '25544',
                 'monitored_satellites': []}
-    assert core.normalize_auto_monitor(settings)['monitored_satellites'] == ['25544']
+    assert core.normalize_auto_monitor(settings)['monitored_satellites'] == ['25544', '7530']
     settings['auto_receive'] = False
     settings['monitored_satellites'] = []
     assert core.normalize_auto_monitor(settings)['monitored_satellites'] == []
@@ -659,6 +673,7 @@ if __name__ == '__main__':
     test_vis_needs_full_leader()
     test_decoder()
     test_pass_paths()
+    test_mapped_paths_and_rings()
     test_home_passes()
     test_mapped_home_passes_are_merged()
     test_doppler_only_in_range()
@@ -668,7 +683,7 @@ if __name__ == '__main__':
     test_footprint_auto_receive_boundary()
     test_new_catalog_number_orbit()
     test_auto_receive_follows_footprint()
-    test_auto_receive_arms_selected_satellite_from_empty_list()
+    test_auto_receive_arms_mapped_satellites_from_empty_list()
     test_auto_receive_leaves_manual_receiver_running()
     test_manual_receiver_doppler_only_inside_footprint()
     test_auto_receive_switches_monitored_satellites()

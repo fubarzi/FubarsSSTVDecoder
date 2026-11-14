@@ -83,6 +83,7 @@ def main():
         assert len(app.thumbnail_paths) == 1
         assert app.thumbnail_paths[0] == app.last_save
         assert app.last_save.is_file()
+        assert app.last_save.name.startswith('ISS_')
         app._open_saved_image(app.last_save)
         viewers = [child for child in root.winfo_children() if isinstance(child, tk.Toplevel)]
         assert len(viewers) == 1
@@ -407,6 +408,10 @@ def main():
         assert reopened.app.settings['selected_satellite'] == '7530'
         assert 'AO-07' in reopened.selected_satellite_label.cget('text')
         assert len(reopened.app.orbit()['tracked']) == 2
+        deadline = time.time() + 2
+        while '7530' not in reopened.map_paths and time.time() < deadline:
+            pump(root, .05)
+        assert '7530' in reopened.map_paths
         reopened.tracked_list.selection_clear(0, 'end')
         reopened.tracked_list.selection_set(0, 1)
         reopened._select_pass_satellites()
@@ -496,6 +501,13 @@ def main():
                 pump(root, .05)
             update_iss.assert_called_once()
             update_catalog.assert_called_once()
+        reopened.save_image(image=Image.new('RGB', (40, 32), 'blue'))
+        assert reopened.last_save.name.startswith('AO-07_')
+        reopened.arm_auto_receive()
+        assert reopened.app.settings['monitored_satellites'] == ['25544', '7530']
+        reopened.tracked_list.selection_clear(0, 'end')
+        reopened.tracked_list.selection_set(0)
+        reopened._unmonitor_selected()
         reopened.close()
         assert json.loads(temporary.read_text(encoding='utf-8'))['selected_satellite'] == '7530'
         assert json.loads(temporary.read_text(encoding='utf-8'))['monitored_satellites'] == ['7530']
