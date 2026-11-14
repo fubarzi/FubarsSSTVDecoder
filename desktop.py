@@ -683,6 +683,12 @@ class Desktop:
         self.squelch.pack(anchor='w', padx=10)
         self.squelch_status = self._label(parent, 'Signal: —  ·  squelch off', MUTED, 9)
         self.squelch_status.pack(anchor='w', padx=10)
+        self.auto_squelch = tk.BooleanVar(value=False)
+        self.auto_squelch_checkbox = tk.Checkbutton(
+            parent, text='Auto squelch for weak AM signals', variable=self.auto_squelch,
+            command=self._auto_squelch_changed, bg=PANEL, fg=WHITE, selectcolor=PANEL2,
+            activebackground=PANEL, activeforeground=WHITE)
+        self.auto_squelch_checkbox.pack(anchor='w', padx=10, pady=(5, 0))
         self._row(parent, 'FREQUENCY CORRECTION  ·  PPM')
         self.ppm = self._entry(parent)
         self.ppm.pack(anchor='w', padx=10)
@@ -1318,6 +1324,7 @@ class Desktop:
         self.bandwidth.set(str(cfg['bandwidth_khz']))
         self.gain.set(float(cfg['gain_db']))
         self.squelch.set(float(cfg.get('squelch_dbfs', -120)))
+        self.auto_squelch.set(bool(cfg.get('auto_squelch_enabled', False)))
         self.ppm.insert(0, str(cfg['ppm_correction']))
         self.demod_combo.set(cfg.get('demod_mode', 'FM'))
         self.noise_filter.set(bool(cfg.get('noise_filter_enabled', True)))
@@ -1478,6 +1485,12 @@ class Desktop:
         with self.app.lock:
             self.app.settings['squelch_dbfs'] = threshold
 
+    def _auto_squelch_changed(self):
+        self._update_filter_control()
+        if self.save_settings():
+            self._status('AM auto squelch on · opens for a carrier above nearby noise'
+                         if self.auto_squelch.get() else 'Manual squelch restored')
+
     def _noise_changed(self):
         enabled = self.noise_filter.get()
         self.app.receiver.noise_filter_enabled = enabled
@@ -1511,6 +1524,9 @@ class Desktop:
 
     def _update_filter_control(self):
         self.noise_filter_checkbox.config(state='disabled' if self.demod_combo.get() == 'WFM' else 'normal')
+        am_mode = self.demod_combo.get() == 'AM'
+        self.auto_squelch_checkbox.config(state='normal' if am_mode else 'disabled')
+        self.squelch.config(state='disabled' if am_mode and self.auto_squelch.get() else 'normal')
 
     def _restore_session(self):
         positions = self.app.settings.get('pane_positions') or {}
@@ -1591,6 +1607,7 @@ class Desktop:
                           doppler_enabled=self.doppler.get(), demod_mode=mode,
                           antenna_name=('' if self.antenna_combo.get() == 'Auto' else self.antenna_combo.get()),
                           noise_filter_enabled=self.noise_filter.get(),
+                          auto_squelch_enabled=self.auto_squelch.get(),
                           receiver_center_mhz=held_center)
             with self.app.lock:
                 self.app.settings.update(values)
@@ -1599,6 +1616,7 @@ class Desktop:
             self.app.receiver.target_gain_db = gain
             self.app.receiver.target_ppm_correction = ppm
             self.app.receiver.target_squelch_dbfs = squelch
+            self.app.receiver.target_auto_squelch = self.auto_squelch.get()
             self.app.receiver.noise_filter_enabled = self.noise_filter.get()
             self.app.receiver.target_frequency_mhz = freq + self._doppler_shift_hz() / 1e6
             self.app.receiver.target_center_mhz = center
@@ -1759,7 +1777,8 @@ class Desktop:
             self.app.receiver.start(cfg['device_id'], cfg['frequency_mhz'], cfg['gain_db'],
                                     cfg['bandwidth_khz'], cfg['ppm_correction'],
                                     cfg['demod_mode'], cfg['antenna_name'], cfg['noise_filter_enabled'],
-                                    cfg['squelch_dbfs'], cfg.get('receiver_center_mhz'))
+                                    cfg['squelch_dbfs'], cfg.get('receiver_center_mhz'),
+                                    cfg.get('auto_squelch_enabled', False))
             self.select_sdr_audio()
             self._status('Opening ' + self.device_combo.get())
         except Exception as exc:
@@ -2059,8 +2078,14 @@ class Desktop:
         if data['running'] and level is not None:
             state = ('OFF' if self.squelch.get() <= -120 else
                      'OPEN' if data.get('squelch_open', True) else 'CLOSED')
-            self.squelch_status.config(text=f'Signal: {level:.0f} dBFS  ·  squelch {state}',
-                                       fg=GREEN if state != 'CLOSED' else MUTED)
+            if self.auto_squelch.get() and self.demod_combo.get() == 'AM':
+                state = 'OPEN' if data.get('squelch_open', True) else 'CLOSED'
+                snr = data.get('carrier_snr_db', 0)
+                self.squelch_status.config(text=f'AM carrier: {snr:.0f} dB above noise  ·  auto squelch {state}',
+                                           fg=GREEN if state == 'OPEN' else MUTED)
+            else:
+                self.squelch_status.config(text=f'Signal: {level:.0f} dBFS  ·  squelch {state}',
+                                           fg=GREEN if state != 'CLOSED' else MUTED)
         else:
             self.squelch_status.config(text='Signal: —  ·  squelch off', fg=MUTED)
         try:

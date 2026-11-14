@@ -50,6 +50,7 @@ DEFAULT_SETTINGS = {'frequency_mhz': 437.55, 'home_lat': None, 'home_lon': None,
                     'thumbnail_cleared_at_ns': 0,
                     'map_zoom': 1.0, 'map_pan_x': 0.0, 'map_pan_y': 0.0, 'selected_tab': 0,
                     'spectrum_floor_dbfs': -105, 'squelch_dbfs': -120,
+                    'auto_squelch_enabled': False,
                     'receiver_center_mhz': None, 'selected_satellite': '25544',
                     'tracked_satellites': ['25544'], 'monitored_satellites': [],
                     'pass_satellites': None}
@@ -128,7 +129,8 @@ def write_ini(path: Path, values):
     sections = {
         'Receiver': ('frequency_mhz', 'gain_db', 'bandwidth_khz', 'device_id',
                      'ppm_correction', 'demod_mode', 'antenna_name',
-                     'noise_filter_enabled', 'squelch_dbfs', 'receiver_center_mhz'),
+                     'noise_filter_enabled', 'squelch_dbfs', 'auto_squelch_enabled',
+                     'receiver_center_mhz'),
         'Decoder': ('decoder_mode',),
         'Audio output': ('audio_output_name', 'monitor_enabled', 'monitor_volume'),
         'Tracker': ('home_lat', 'home_lon', 'auto_receive', 'doppler_enabled'),
@@ -364,13 +366,15 @@ class Receiver:
         self.antenna_name = ''
         self.noise_filter_enabled = True
         self.target_squelch_dbfs = -120.0
+        self.target_auto_squelch = False
         self.signal_level_dbfs = -120.0
+        self.carrier_snr_db = 0.0
         self.squelch_open = True
         self.monitor_sink = None
 
     def start(self, device_id, frequency_mhz, gain_db, bandwidth_khz=12.5,
               ppm_correction=0, demod_mode='FM', antenna_name='', noise_filter_enabled=True,
-              squelch_dbfs=-120, center_frequency_mhz=None):
+              squelch_dbfs=-120, center_frequency_mhz=None, auto_squelch=False):
         self.stop()
         if not self.soapy.lib:
             raise RuntimeError(self.soapy.error)
@@ -395,7 +399,9 @@ class Receiver:
         self.antenna_name = antenna_name
         self.noise_filter_enabled = bool(noise_filter_enabled)
         self.target_squelch_dbfs = float(squelch_dbfs)
+        self.target_auto_squelch = bool(auto_squelch)
         self.signal_level_dbfs = -120.0
+        self.carrier_snr_db = 0.0
         self.squelch_open = True
         self.thread = threading.Thread(target=self._run,
                                        args=(device_id, frequency_mhz, gain_db, antenna_name), daemon=True)
@@ -542,8 +548,11 @@ class Receiver:
                     audio_filter.reset()
                 if filter_enabled and self.demod_mode != 'WFM':
                     audio = audio_filter.process(audio)
-                audio = squelch.process(iq, audio, self.target_squelch_dbfs)
+                auto_am = self.target_auto_squelch and self.demod_mode == 'AM'
+                audio = squelch.process(shifted_iq if auto_am else iq, audio,
+                                        self.target_squelch_dbfs, auto_am=auto_am)
                 self.signal_level_dbfs = squelch.level_dbfs
+                self.carrier_snr_db = squelch.carrier_snr_db
                 self.squelch_open = squelch.is_open
                 sink = self.monitor_sink
                 if sink is not None and len(audio):
@@ -593,7 +602,8 @@ class Receiver:
                     'audio': chunks, 'iq': self.iq, 'iq_frames': frames,
                     'applied_gain_db': self.applied_gain_db, 'gain_detail': self.gain_detail,
                     'applied_ppm_correction': self.applied_ppm_correction,
-                    'signal_level_dbfs': self.signal_level_dbfs, 'squelch_open': self.squelch_open}
+                    'signal_level_dbfs': self.signal_level_dbfs,
+                    'carrier_snr_db': self.carrier_snr_db, 'squelch_open': self.squelch_open}
 
 
 class HybridReceiver:
@@ -671,6 +681,14 @@ class HybridReceiver:
         self.active.target_squelch_dbfs = float(value)
 
     @property
+    def target_auto_squelch(self):
+        return self.active.target_auto_squelch
+
+    @target_auto_squelch.setter
+    def target_auto_squelch(self, value):
+        self.active.target_auto_squelch = bool(value)
+
+    @property
     def monitor_sink(self):
         return self.active.monitor_sink
 
@@ -681,14 +699,14 @@ class HybridReceiver:
 
     def start(self, device_id, frequency_mhz, gain_db, bandwidth_khz=12.5,
               ppm_correction=0, demod_mode='FM', antenna_name='', noise_filter_enabled=True,
-              squelch_dbfs=-120, center_frequency_mhz=None):
+              squelch_dbfs=-120, center_frequency_mhz=None, auto_squelch=False):
         self.stop()
         self.active = self.rtl_receiver if device_id.startswith('rtl:') else self.soapy_receiver
         center_frequency_mhz = safe_receiver_center(frequency_mhz, center_frequency_mhz,
                                                     bandwidth_khz, demod_mode)
         self.active.start(device_id, frequency_mhz, gain_db, bandwidth_khz,
                           ppm_correction, demod_mode, antenna_name, noise_filter_enabled,
-                          squelch_dbfs, center_frequency_mhz)
+                          squelch_dbfs, center_frequency_mhz, auto_squelch)
 
     def stop(self):
         self.active.stop()
@@ -888,7 +906,8 @@ class App:
                         self.receiver.start(cfg['device_id'], frequency, cfg['gain_db'],
                                             cfg['bandwidth_khz'], cfg['ppm_correction'],
                                             'FM', cfg['antenna_name'], cfg['noise_filter_enabled'],
-                                            cfg['squelch_dbfs'], None)
+                                            cfg['squelch_dbfs'], None,
+                                            cfg.get('auto_squelch_enabled', False))
                         self.auto_started = True
                         self.auto_active_satellite = target
                         self.auto_active_frequency_mhz = frequency

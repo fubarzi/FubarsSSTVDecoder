@@ -284,6 +284,16 @@ def main():
         restored.squelch.set(-50)
         pump(root, .1)
         assert restored.app.receiver.target_squelch_dbfs == -50
+        restored.demod_combo.set('AM')
+        restored._mode_changed()
+        restored.auto_squelch.set(True)
+        restored._auto_squelch_changed()
+        assert restored.app.settings['auto_squelch_enabled'] is True
+        assert restored.app.receiver.target_auto_squelch is True
+        assert str(restored.squelch.cget('state')) == 'disabled'
+        restored.auto_squelch.set(False)
+        restored._auto_squelch_changed()
+        assert str(restored.squelch.cget('state')) == 'normal'
         restored.demod_combo.set('WFM')
         restored._mode_changed()
         assert restored.bandwidth.get() == '200'

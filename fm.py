@@ -299,18 +299,42 @@ class StreamingSquelch:
 
     def reset(self):
         self.level_dbfs = -120.0
+        self.carrier_snr_db = 0.0
         self.is_open = True
         self.low_seconds = 0.0
         self.gate = 1.0
 
-    def process(self, iq, audio, threshold_dbfs):
+    def process(self, iq, audio, threshold_dbfs, auto_am=False):
         iq = np.asarray(iq, dtype=np.complex64)
         audio = np.asarray(audio, dtype=np.float32)
         if len(iq):
             power = float(np.mean(iq.real * iq.real + iq.imag * iq.imag)) / 2
             measured = 10 * math.log10(max(power, 1e-12))
             self.level_dbfs = .8 * self.level_dbfs + .2 * measured if self.level_dbfs > -120 else measured
-        if threshold_dbfs <= -120:
+        if auto_am and len(iq) >= 1024:
+            count = min(16384, len(iq))
+            window = np.hanning(count)
+            spectrum = abs(np.fft.fftshift(np.fft.fft(iq[:count] * window))) ** 2
+            frequencies = np.fft.fftshift(np.fft.fftfreq(count, 1 / self.iq_rate))
+            offset = abs(frequencies + StreamingHFDemodulator.offset_hz)
+            carrier = offset < 1000
+            reference = (offset > 6000) & (offset < 20000)
+            if np.any(carrier) and np.any(reference):
+                noise = max(float(np.median(spectrum[reference])), 1e-20)
+                peak = max(float(np.max(spectrum[carrier])), 1e-20)
+                measured_snr = 10 * math.log10(peak / noise)
+                self.carrier_snr_db = (.6 * self.carrier_snr_db + .4 * measured_snr
+                                       if self.carrier_snr_db else measured_snr)
+            if self.carrier_snr_db >= 14:
+                self.is_open = True
+                self.low_seconds = 0.0
+            elif self.carrier_snr_db < 11:
+                self.low_seconds += len(iq) / self.iq_rate
+                if self.low_seconds >= .25:
+                    self.is_open = False
+            else:
+                self.low_seconds = 0.0
+        elif threshold_dbfs <= -120:
             self.is_open = True
             self.low_seconds = 0.0
         elif self.level_dbfs >= threshold_dbfs:

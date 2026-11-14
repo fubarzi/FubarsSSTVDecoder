@@ -142,13 +142,15 @@ class RTLReceiver:
         self.applied_gain_db = None
         self.noise_filter_enabled = True
         self.target_squelch_dbfs = -120.0
+        self.target_auto_squelch = False
         self.signal_level_dbfs = -120.0
+        self.carrier_snr_db = 0.0
         self.squelch_open = True
         self.monitor_sink = None
 
     def start(self, device_id, frequency_mhz, gain_db, bandwidth_khz=12.5,
               ppm_correction=0, demod_mode='FM', antenna_name='', noise_filter_enabled=True,
-              squelch_dbfs=-120, center_frequency_mhz=None):
+              squelch_dbfs=-120, center_frequency_mhz=None, auto_squelch=False):
         self.stop()
         if not self.driver.lib:
             raise RuntimeError(self.driver.error)
@@ -171,7 +173,9 @@ class RTLReceiver:
         self.applied_gain_db = None
         self.noise_filter_enabled = bool(noise_filter_enabled)
         self.target_squelch_dbfs = float(squelch_dbfs)
+        self.target_auto_squelch = bool(auto_squelch)
         self.signal_level_dbfs = -120.0
+        self.carrier_snr_db = 0.0
         self.squelch_open = True
         self.thread = threading.Thread(target=self._run,
                                        args=(int(device_id[4:]), float(gain_db)), daemon=True)
@@ -273,8 +277,11 @@ class RTLReceiver:
                     audio_filter.reset()
                 if filter_enabled and self.demod_mode != 'WFM':
                     audio = audio_filter.process(audio)
-                audio = squelch.process(iq, audio, self.target_squelch_dbfs)
+                auto_am = self.target_auto_squelch and self.demod_mode == 'AM'
+                audio = squelch.process(shifted_iq if auto_am else iq, audio,
+                                        self.target_squelch_dbfs, auto_am=auto_am)
                 self.signal_level_dbfs = squelch.level_dbfs
+                self.carrier_snr_db = squelch.carrier_snr_db
                 self.squelch_open = squelch.is_open
                 sink = self.monitor_sink
                 if sink is not None and len(audio):
@@ -307,4 +314,5 @@ class RTLReceiver:
                     'tuned_frequency_mhz': self.tuned_frequency_mhz,
                     'applied_gain_db': self.applied_gain_db,
                     'applied_ppm_correction': self.applied_ppm_correction,
-                    'signal_level_dbfs': self.signal_level_dbfs, 'squelch_open': self.squelch_open}
+                    'signal_level_dbfs': self.signal_level_dbfs,
+                    'carrier_snr_db': self.carrier_snr_db, 'squelch_open': self.squelch_open}

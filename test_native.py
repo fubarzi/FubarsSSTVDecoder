@@ -245,6 +245,24 @@ def test_wfm_and_squelch():
     assert np.all(gate.process(quiet, speaker, -120) == 1)
 
 
+def test_auto_am_squelch_opens_weak_carrier():
+    rate = 240000
+    count = 16384
+    rng = np.random.default_rng(42)
+    gate = StreamingSquelch(rate, 24000)
+    speaker = np.ones(round(count / 10), dtype=np.float32)
+    for _ in range(10):
+        noise = (rng.normal(size=count) + 1j * rng.normal(size=count)).astype(np.complex64) * .003
+        gate.process(noise, speaker, -39, auto_am=True)
+    assert not gate.is_open
+    carrier = (.01 * np.exp(-2j * math.pi * 12000 * np.arange(count) / rate)).astype(np.complex64)
+    for _ in range(3):
+        noise = (rng.normal(size=count) + 1j * rng.normal(size=count)).astype(np.complex64) * .003
+        output = gate.process(carrier + noise, speaker, -39, auto_am=True)
+    assert gate.is_open and gate.carrier_snr_db >= 14
+    assert output[-1] == 1
+
+
 def test_doppler_only_in_range():
     lines = read_json(TLE_FILE, {})['lines']
     now = datetime.now(timezone.utc)
@@ -707,6 +725,7 @@ if __name__ == '__main__':
     test_streaming_fm_demodulator()
     test_marker_tunes_with_fixed_spectrum_center()
     test_wfm_and_squelch()
+    test_auto_am_squelch_opens_weak_carrier()
     test_hf_sidebands_and_noise_filter()
     test_airband_am_keeps_voice_and_rejects_hiss()
     test_sdrplay_gain_direction()
