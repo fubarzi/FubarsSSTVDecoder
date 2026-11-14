@@ -262,6 +262,7 @@ class Desktop:
         return tk.Button(parent, text=text, command=command, width=width, bg='#053628', fg=WHITE,
                          activebackground='#12684c', activeforeground=WHITE, relief='flat',
                          highlightthickness=1, highlightbackground='#13805d', padx=10, pady=5,
+                         wraplength=300,
                          font=('Segoe UI', 9, 'bold'))
 
     def _combo(self, parent, values=(), width=25):
@@ -1329,6 +1330,8 @@ class Desktop:
     def _set_ui_language(self, language):
         self.ui_language = language
         self.language_combo.set(self.languages.get(language, 'English'))
+        ttk.Style().configure('TNotebook.Tab', padding=(12, 7) if language == 'en' else (5, 5),
+                              font=('Segoe UI', 9 if language == 'en' else 8))
         self._translate_ui_scan()
 
     def _translate_ui_scan(self):
@@ -1359,7 +1362,8 @@ class Desktop:
             if not isinstance(widget, (tk.Label, tk.Button, tk.Checkbutton)) or widget in skip:
                 continue
             current = widget.cget('text')
-            if not current or len(current) > 300 or 'FUBAR\'S SSTV DECODER' in current:
+            if (not current or len(current) > 300 or not any(ch.isalpha() for ch in current)
+                    or 'FUBAR\'S SSTV DECODER' in current):
                 continue
             previous = self.ui_text_state.get(widget)
             original = previous[0] if previous and current == previous[1] else current
