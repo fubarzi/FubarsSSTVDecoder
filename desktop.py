@@ -1896,7 +1896,10 @@ class Desktop:
         if image is None:
             self._status('No decoded image to view')
             return
-        self._show_image_window(image, f'ISS SSTV image · {(self.mmsstv.mode or "SSTV")} · 1:1 pixels')
+        active = (self.app.auto_active_satellite if self.app.auto_started else
+                  str(self.app.settings.get('selected_satellite', '25544')))
+        name = self.app.selected_tle(catalog_number=active).get('name', 'Satellite')
+        self._show_image_window(image, f'{name} SSTV image · {(self.mmsstv.mode or "SSTV")} · 1:1 pixels')
 
     def _show_image_window(self, image, title):
         window = tk.Toplevel(self.root)
@@ -2124,7 +2127,7 @@ class Desktop:
         tle = info['tle']
         lines = tle.get('lines', [])
         name = tle.get('name', 'Satellite')
-        self.map_title.config(text='SATELLITES ON MAP   •   RINGS: RADIO COVERAGE   •   SOLID: FUTURE PATH   •   DASHED: PAST PATH')
+        self.map_title.config(text='SATELLITES ON MAP   •   RINGS: RADIO COVERAGE   •   SOLID/DASHED: GROUND TRACKS')
         self.selected_satellite_label.config(text=f"Selected: {name} · NORAD {self.app.settings.get('selected_satellite', '25544')}")
         if valid_orbit(lines):
             epoch = orbit_epoch(lines)
