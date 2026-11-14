@@ -4,6 +4,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
+import threading
 from urllib.request import Request, urlopen
 
 
@@ -74,8 +75,11 @@ def merge_latest(base, additions):
 class SatelliteCatalog:
     def __init__(self, path: Path):
         self.path = path
+        self.lock = threading.Lock()
+        self.manual_path = path.with_name('satellites.manual.json')
         self.records = {}
         self.defaults = {}
+        self.manual = {}
         self.checked_at = None
         self.status = 'Catalog not downloaded'
         try:
@@ -92,6 +96,12 @@ class SatelliteCatalog:
             self.checked_at = datetime.fromisoformat(saved['checked_at'])
         except (OSError, ValueError, KeyError, TypeError):
             pass
+        try:
+            saved = json.loads(self.manual_path.read_text(encoding='utf-8'))
+            self.manual = {str(row['NORAD_CAT_ID']): row for row in saved['records'] if valid_record(row)}
+            self.records.update(self.manual)
+        except (OSError, ValueError, KeyError, TypeError):
+            pass
         if self.records:
             self.status = f'{len(self.records):,} amateur satellites cached'
 
@@ -100,6 +110,34 @@ class SatelliteCatalog:
 
     def get(self, catalog_number):
         return self.records.get(str(catalog_number))
+
+    def add_manual(self, name, lines):
+        """Save a user supplied TLE independently of downloaded catalog data."""
+        name = name.strip()
+        lines = [line.strip() for line in lines]
+        if not name or len(name) > 80:
+            raise ValueError('Enter a satellite name of up to 80 characters')
+        if not valid_tle(lines):
+            raise ValueError('Enter two complete TLE lines with valid checksums and matching NORAD IDs')
+        try:
+            number = int(lines[0][2:7])
+        except ValueError as exc:
+            raise ValueError('The TLE must use a numeric NORAD ID') from exc
+        if number == 25544:
+            raise ValueError('The ISS orbit is managed separately; use Update Selected Orbit Data')
+        row = {'NORAD_CAT_ID': number, 'OBJECT_NAME': name, 'lines': lines}
+        with self.lock:
+            manual = {**self.manual, str(number): row}
+            temporary = self.manual_path.with_name(self.manual_path.name + '.tmp')
+            try:
+                temporary.write_text(json.dumps({'records': list(manual.values())}, indent=2), encoding='utf-8')
+                temporary.replace(self.manual_path)
+            finally:
+                temporary.unlink(missing_ok=True)
+            self.manual = manual
+            self.records = {**self.records, str(number): row}
+            self.status = f'{len(self.records):,} amateur satellites cached · {len(self.manual)} added manually'
+        return number
 
     def refresh(self):
         now = datetime.now(timezone.utc)
@@ -136,10 +174,12 @@ class SatelliteCatalog:
             if not records:
                 raise ValueError('No usable satellite records')
             records = merge_latest(self.defaults, records)
-            self.path.write_text(json.dumps({'checked_at': now.isoformat(), 'records': list(records.values())}),
-                                 encoding='utf-8')
-            self.records, self.checked_at = records, now
-            self.status = f'{len(records):,} amateur satellites updated from {source_name} · {now:%d %b %H:%M} UTC'
+            with self.lock:
+                self.path.write_text(json.dumps({'checked_at': now.isoformat(), 'records': list(records.values())}),
+                                     encoding='utf-8')
+                records.update(self.manual)
+                self.records, self.checked_at = records, now
+                self.status = f'{len(records):,} amateur satellites updated from {source_name} · {now:%d %b %H:%M} UTC'
         except Exception as exc:
             self.status = f'Catalog update failed · using {len(self.records):,} cached satellites · {exc}'
         return self.status

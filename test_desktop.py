@@ -108,6 +108,8 @@ def main():
         assert (app.hf_lsb_button.winfo_rootx() + app.hf_lsb_button.winfo_width()
                 <= app.tabs.winfo_rootx() + app.tabs.winfo_width()), 'HF buttons are clipped'
         assert app.volume_slider.winfo_viewable()
+        assert (app.language_combo.winfo_rootx() + app.language_combo.winfo_width()
+                <= root.winfo_rootx() + root.winfo_width())
         assert app.map_canvas.winfo_height() >= 140
         assert (app.pass_labels[-1].winfo_rooty() + app.pass_labels[-1].winfo_height()
                 <= app.bottom_pane.winfo_rooty() + app.bottom_pane.winfo_height())
@@ -441,12 +443,16 @@ def main():
         assert reopened.sstv_frequency_combo.current() == 1
         assert 'ISS' in reopened.sstv_frequency_combo['values'][0]
         assert 'AO-07' in reopened.sstv_frequency_combo['values'][1]
+        reopened.sstv_satellite_search.set('AO-07')
+        assert len(reopened.sstv_rows) == 1
+        assert reopened.sstv_rows[0]['satellite_id'] == '7530'
+        reopened.sstv_satellite_search.set('')
         reopened.tracked_list.selection_clear(0, 'end')
         reopened.tracked_list.selection_set(1)
         reopened.tracked_list.event_generate('<<ListboxSelect>>')
         pump(root, .05)
-        assert len(reopened.sstv_rows) == 1
-        assert reopened.sstv_rows[0]['satellite_id'] == '7530'
+        assert len(reopened.sstv_rows) == 2
+        assert {row['satellite_id'] for row in reopened.sstv_rows} == {'25544', '7530'}
         reopened._show_sstv_frequencies(before_sstv_tune, {'25544': [], '7530': []},
                                         'SatNOGS DB · updated/cached')
         assert reopened.sstv_rows[0]['frequency_mhz'] is None
@@ -512,6 +518,38 @@ def main():
         pump(root, .1)
         assert root.geometry() == normal_geometry
         restored_maximized.close()
+        with tempfile.TemporaryDirectory() as catalog_folder, \
+                patch.object(core, 'CATALOG_FILE', Path(catalog_folder) / 'satellites.json'), \
+                patch.object(core.App, 'refresh_catalog', return_value='Catalog test'):
+            root = tk.Tk()
+            manual_app = desktop.Desktop(root)
+            manual_app.translation_loading = True
+            manual_app.band_country_combo.set('Italy')
+            manual_app._country_changed()
+            assert manual_app.app.settings['bandplan_country'] == 'IT'
+            assert manual_app.app.settings['language_code'] == 'it'
+            assert manual_app.language_combo.get() == 'Italian'
+            assert '7.165' in manual_app.hf_lsb_button.cget('text')
+            manual_app.language_combo.set('German')
+            manual_app._language_changed()
+            assert manual_app.app.settings['language_code'] == 'de'
+            manual_app._add_satellite_manually()
+            dialog = next(child for child in root.winfo_children() if isinstance(child, tk.Toplevel))
+            entries = [child for child in dialog.winfo_children() if isinstance(child, tk.Entry)]
+            tle_box = next(child for child in dialog.winfo_children() if isinstance(child, tk.Text))
+            entries[0].insert(0, 'LUCA')
+            entries[1].insert(0, '437.450')
+            tle_box.insert('1.0', '\n'.join((
+                '1 67287U 25313AR  26317.19964205  .00010094  00000-0  38548-3 0  9994',
+                '2 67287  97.3803  30.3533 0008986 180.2735 179.8501 15.26796163 48690')))
+            button_row = next(child for child in dialog.winfo_children() if isinstance(child, tk.Frame))
+            next(child for child in button_row.winfo_children() if isinstance(child, tk.Button)
+                 and child.cget('text') == 'SAVE AND ADD TO MAP').invoke()
+            assert manual_app.app.catalog.get(67287)['OBJECT_NAME'] == 'LUCA'
+            assert manual_app.app.settings['manual_sstv_frequencies']['67287'] == 437.45
+            assert '67287' in manual_app.app.settings['tracked_satellites']
+            assert manual_app.frequency.get() == '437.450000'
+            manual_app.close()
         print('Desktop satellite selection, pass list, WFM, squelch, spectrum, persistence, and TLE button passed')
     finally:
         desktop.RECEIVED_DIR = original_received
@@ -525,5 +563,6 @@ def main():
 
 if __name__ == '__main__':
     with patch.object(desktop.SSTVFrequencies, 'lookup', return_value=([], 'Test transmitter data')), \
+            patch.object(desktop.SSTVFrequencies, 'lookup_all', return_value=({}, 'Test transmitter data')), \
             patch.object(desktop.Desktop, '_start_mmsstv'):
         main()

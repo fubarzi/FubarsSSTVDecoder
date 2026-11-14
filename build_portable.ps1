@@ -13,7 +13,7 @@ try {
     & py -3.12 -m PyInstaller --noconfirm --clean --onedir --windowed --name FubarsSSTVDecoder --distpath $stageRoot --paths vendor --hidden-import sgp4.api --hidden-import sgp4.model --exclude-module psutil --exclude-module yaml desktop.py
     if ($LASTEXITCODE -ne 0) { throw 'PyInstaller build failed.' }
 
-    foreach ($name in @('worldmap.jpg', 'README.md', 'VERSION.txt', 'satellites.default.json', 'sstv_frequencies.default.json')) {
+    foreach ($name in @('worldmap.jpg', 'README.md', 'VERSION.txt', 'country_regions.json', 'satellites.default.json', 'sstv_frequencies.default.json')) {
         Copy-Item -LiteralPath (Join-Path $projectRoot $name) -Destination (Join-Path $outputDir $name) -Force
     }
     Copy-Item -LiteralPath (Join-Path $projectRoot 'iss.tle.json') -Destination (Join-Path $outputDir 'iss.tle.default.json') -Force
@@ -46,6 +46,7 @@ The driver installation is a separate Windows step; the app never installs it si
     New-Item -ItemType Directory -Path $licenseDir -Force | Out-Null
     Copy-Item -LiteralPath (Join-Path $projectRoot 'vendor\sgp4-2.27.dist-info\licenses\LICENSE') -Destination (Join-Path $licenseDir 'sgp4-LICENSE.txt') -Force
     Copy-Item -LiteralPath (Join-Path $projectRoot 'vendor\README.txt') -Destination (Join-Path $licenseDir 'sgp4-source.txt') -Force
+    Copy-Item -LiteralPath (Join-Path $projectRoot 'licenses\Unicode-LICENSE.txt') -Destination (Join-Path $licenseDir 'Unicode-LICENSE.txt') -Force
     @'
 FUBAR'S SSTV DECODER — PORTABLE WINDOWS BUILD
 

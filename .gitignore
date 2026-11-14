@@ -6,7 +6,10 @@ tools/
 settings.json
 FubarsSSTVDecoder.ini
 satellites.json
+satellites.manual.json
 sstv_frequencies.json
+sstv_frequencies_all.json
+ui_translations.json
 received_sstv/*
 !received_sstv/README.txt
 mmsstv_engine/sstveng.ini

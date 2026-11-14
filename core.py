@@ -38,6 +38,7 @@ TLE_SOURCES = (
     ('Where the ISS at', 'https://api.wheretheiss.at/v1/satellites/25544/tles', 'json'),
 )
 DEFAULT_SETTINGS = {'frequency_mhz': 437.55, 'home_lat': None, 'home_lon': None,
+                    'bandplan_country': 'AU',
                     'auto_receive': False, 'doppler_enabled': True, 'gain_db': 25.0,
                     'bandwidth_khz': 12.5, 'device_id': '', 'decoder_mode': 'Auto',
                     'ppm_correction': 0,

@@ -10,6 +10,7 @@ import time
 import tkinter as tk
 from tkinter import ttk
 from tkinter import font as tkfont
+import webbrowser
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageTk
@@ -21,6 +22,8 @@ from mmsstv_bridge import MmsstvBridge
 from windows_audio import ensure_cable_decoder_only
 from orbit import position, look_angles, next_mapped_home_passes, footprint_contains
 from sstv_frequencies import SSTVFrequencies
+from bandplans import load_countries, load_languages, sstv_plan
+from ui_translation import TranslationCache
 
 
 BG, PANEL, PANEL2 = '#00120f', '#08221d', '#0c3028'
@@ -155,6 +158,18 @@ class Desktop:
         root.geometry('1500x900')
         root.minsize(1050, 700)
         self.app = App()
+        self.countries = load_countries(ROOT / 'country_regions.json')
+        self.country_names = {row['name']: code for code, row in self.countries.items()}
+        self.languages = load_languages(ROOT / 'country_regions.json')
+        self.language_names = {name: code for code, name in self.languages.items()}
+        self.band_plan = sstv_plan(self.app.settings.get('bandplan_country', 'AU'), self.countries)
+        self.ui_translation = TranslationCache(ROOT / 'ui_translations.json')
+        self.ui_language = 'en'
+        self.ui_text_state = {}
+        self.ui_tab_state = {}
+        self.translation_loading = False
+        self.translation_after_id = None
+        self.translation_retry_after = 0.0
         self.sstv_frequencies = SSTVFrequencies(ROOT / 'sstv_frequencies.json')
         self.sstv_lookup_request = 0
         self.sstv_rows = []
@@ -233,6 +248,7 @@ class Desktop:
         self._request_sstv_frequency()
         self.restore_after_id = self.root.after(400, self._restore_session)
         self._tick()
+        self.translation_after_id = self.root.after(1200, self._translate_ui_scan)
         root.protocol('WM_DELETE_WINDOW', self.close)
 
     def _label(self, parent, text, color=MUTED, size=10, bold=False):
@@ -266,16 +282,30 @@ class Desktop:
         self.root.option_add('*TCombobox*Listbox.background', '#061b17')
         self.root.option_add('*TCombobox*Listbox.selectForeground', '#00120f')
         self.root.option_add('*TCombobox*Listbox.selectBackground', GREEN)
-        header = tk.Frame(self.root, bg=BG, height=58)
+        header = tk.Frame(self.root, bg=BG, height=80)
         header.pack(fill='x', padx=12, pady=(8, 5))
-        self._label(header, "FUBAR'S SSTV DECODER", GREEN, 18, True).pack(side='left', padx=(8, 22))
-        self.header_status = self._label(header, 'ISS FM RECEIVER  •  STANDBY', CYAN, 10, True)
+        header_top = tk.Frame(header, bg=BG)
+        header_top.pack(fill='x')
+        self._label(header_top, "FUBAR'S SSTV DECODER", GREEN, 18, True).pack(side='left', padx=(8, 22))
+        self.header_status = self._label(header_top, 'ISS FM RECEIVER  •  STANDBY', CYAN, 10, True)
         self.header_status.pack(side='left')
-        self.clock = self._label(header, '', GREEN, 11, True)
+        self.clock = self._label(header_top, '', GREEN, 11, True)
         self.clock.pack(side='right', padx=15)
-        self.tle_status = self._label(header, 'Updating ISS TLE…', MUTED, 9)
+        self.tle_status = self._label(header_top, 'Updating ISS TLE…', MUTED, 9)
         self.tle_status.pack(side='right', padx=15)
-        for widget in (header, *header.winfo_children()):
+        header_options = tk.Frame(header, bg=BG)
+        header_options.pack(fill='x', padx=8, pady=(2, 0))
+        self._label(header_options, 'BAND PLAN COUNTRY', CYAN, 8, True).pack(side='left', padx=(0, 5))
+        self.band_country_combo = self._combo(header_options, sorted(self.country_names, key=str.casefold), width=18)
+        self.band_country_combo.config(state='readonly')
+        self.band_country_combo.pack(side='left', padx=(0, 18))
+        self.band_country_combo.bind('<<ComboboxSelected>>', self._country_changed)
+        self._label(header_options, 'LANGUAGE', CYAN, 8, True).pack(side='left', padx=(0, 5))
+        self.language_combo = self._combo(header_options, sorted(self.language_names, key=str.casefold), width=20)
+        self.language_combo.config(state='readonly')
+        self.language_combo.pack(side='left')
+        self.language_combo.bind('<<ComboboxSelected>>', self._language_changed)
+        for widget in (header_top, *header_top.winfo_children()):
             widget.bind('<ButtonPress-1>', self._drag_start)
             widget.bind('<B1-Motion>', self._drag_window)
 
@@ -589,11 +619,12 @@ class Desktop:
         hf_row = tk.Frame(parent, bg=PANEL)
         hf_row.pack(anchor='w', padx=10, pady=(6, 0))
         self.hf_usb_button = self._button(hf_row, 'HF SSTV 14.230 USB',
-                                          lambda: self.set_hf_preset(14.230, 'USB'))
+                                          lambda: self.set_hf_preset(*self.band_plan['presets'][1][1:]))
         self.hf_usb_button.pack(side='left')
         self.hf_lsb_button = self._button(hf_row, 'HF SSTV 7.171 LSB',
-                                          lambda: self.set_hf_preset(7.171, 'LSB'))
+                                          lambda: self.set_hf_preset(*self.band_plan['presets'][0][1:]))
         self.hf_lsb_button.pack(side='left', padx=(5, 0))
+        self._button(parent, 'VIEW BAND PLAN SSTV FREQUENCIES', self._open_band_plan).pack(anchor='w', padx=10, pady=(5, 0))
         self._button(parent, 'TUNE TO SELECTED FREQUENCY', self.tune_now).pack(anchor='w', padx=10, pady=(7, 0))
         self._row(parent, 'CHANNEL BANDWIDTH  ·  kHz')
         self.bandwidth = self._combo(parent, ('2.5', '3', '4', '6.25', '12.5', '15', '20', '25', '50',
@@ -722,6 +753,7 @@ class Desktop:
         catalog_scroll.config(command=self.catalog_list.yview)
         self._label(parent, 'Use Ctrl or Shift to select several satellites.', MUTED, 9).pack(anchor='w', padx=10, pady=4)
         self._button(parent, 'ADD SELECTED TO MAP', self._add_satellites).pack(anchor='w', padx=10)
+        self._button(parent, 'ADD SATELLITE MANUALLY', self._add_satellite_manually).pack(anchor='w', padx=10, pady=(4, 0))
         self._row(parent, 'SATELLITES ON MAP')
         self.tracked_list = tk.Listbox(parent, selectmode='extended', height=4, bg=PANEL2, fg=WHITE,
                                       selectbackground='#146c4b', exportselection=False,
@@ -744,7 +776,14 @@ class Desktop:
         self.selected_satellite_label = self._label(parent, 'Selected: ISS', GREEN, 10, True)
         self.selected_satellite_label.config(wraplength=310, justify='left')
         self.selected_satellite_label.pack(anchor='w', padx=10, pady=10)
-        self._row(parent, 'SSTV DOWNLINK  ·  SELECTED MAP SATELLITES  ·  SATNOGS DB')
+        self._row(parent, 'SSTV DOWNLINK  ·  ALL CATALOG SATELLITES  ·  SATNOGS DB')
+        self._label(parent, 'SEARCH SSTV SATELLITES  ·  NAME OR NORAD ID', CYAN, 9).pack(anchor='w', padx=10)
+        self.sstv_satellite_search = tk.StringVar()
+        sstv_search = self._entry(parent, 28)
+        sstv_search.config(textvariable=self.sstv_satellite_search)
+        sstv_search.pack(fill='x', padx=10, pady=(2, 5))
+        self.sstv_satellite_search.trace_add('write', lambda *_: self._display_sstv_rows(
+            None, self.sstv_lookup_status, auto_tune=False))
         self.sstv_frequency_combo = self._combo(parent, width=31)
         self.sstv_frequency_combo.pack(fill='x', padx=10)
         self.sstv_frequency_combo.bind('<<ComboboxSelected>>', self._sstv_downlink_selected)
@@ -836,6 +875,62 @@ class Desktop:
             return
         tracked = self.app.settings.get('tracked_satellites', ['25544'])
         self._set_tracked([*tracked, *chosen], chosen[0])
+
+    def _add_satellite_manually(self):
+        window = tk.Toplevel(self.root)
+        window.title('Add satellite manually')
+        window.configure(bg=PANEL)
+        window.geometry('760x310')
+        window.resizable(False, False)
+        window.transient(self.root)
+        self._label(window, 'SATELLITE NAME', CYAN, 10, True).pack(anchor='w', padx=16, pady=(14, 2))
+        name_entry = self._entry(window, 72)
+        name_entry.pack(fill='x', padx=16)
+        self._label(window, 'SSTV DOWNLINK FREQUENCY  ·  MHz', CYAN, 10, True).pack(anchor='w', padx=16, pady=(12, 2))
+        frequency_entry = self._entry(window, 20)
+        frequency_entry.pack(anchor='w', padx=16)
+        self._label(window, 'TLE  ·  PASTE BOTH LINES', CYAN, 10, True).pack(anchor='w', padx=16, pady=(12, 2))
+        tle_entry = tk.Text(window, height=3, width=76, bg='#061b17', fg=WHITE,
+                            insertbackground=WHITE, relief='flat', highlightthickness=1,
+                            highlightbackground='#236652', font=('Consolas', 10))
+        tle_entry.pack(fill='x', padx=16)
+        error_label = self._label(window, '', '#ff9d86', 9)
+        error_label.pack(anchor='w', padx=16, pady=(7, 0))
+
+        def save():
+            try:
+                frequency = float(frequency_entry.get().strip())
+                if not math.isfinite(frequency) or not .001 <= frequency <= 1700:
+                    raise ValueError
+            except ValueError:
+                error_label.config(text='Enter a frequency from 0.001 to 1700 MHz.')
+                return
+            name = name_entry.get().strip()
+            lines = tle_entry.get('1.0', 'end').strip().splitlines()
+            try:
+                number = self.app.catalog.add_manual(name, lines)
+                with self.app.lock:
+                    manual = dict(self.app.settings.get('manual_sstv_frequencies', {}))
+                    manual[str(number)] = round(frequency, 6)
+                    self.app.settings['manual_sstv_frequencies'] = manual
+                tracked = self.app.settings.get('tracked_satellites', ['25544'])
+                self._set_tracked([*tracked, str(number)], str(number))
+                self._tune_sstv_frequency(round(frequency, 6), manual=True)
+            except (OSError, ValueError) as exc:
+                error_label.config(text=str(exc))
+                return
+            self.satellite_search.set(str(number))
+            self.catalog_list.selection_set(0)
+            window.destroy()
+            self._status(f'{name} · NORAD {number} saved and tuned to {frequency:.6f} MHz')
+
+        buttons = tk.Frame(window, bg=PANEL)
+        buttons.pack(anchor='w', padx=16, pady=5)
+        self._button(buttons, 'SAVE AND ADD TO MAP', save).pack(side='left')
+        self._button(buttons, 'CANCEL', window.destroy).pack(side='left', padx=8)
+        window.bind('<Escape>', lambda _event: window.destroy())
+        name_entry.focus_set()
+        window.grab_set()
 
     def _remove_satellite(self):
         selection = self.tracked_list.curselection()
@@ -960,28 +1055,39 @@ class Desktop:
                 dial_before is None or abs(dial_before - manual) > .000001 or
                 self.demod_combo.get() != 'FM'):
             self._tune_sstv_frequency(manual, manual=True)
-        cached = {number: self.sstv_frequencies.cached(number) for number in tracked}
+        cached = self.sstv_frequencies.cached_all()
+        for number in tracked:
+            known = list(cached.get(number, []))
+            known.extend(item for item in self.sstv_frequencies.cached(number)
+                         if not any(abs(item['frequency_mhz'] - other['frequency_mhz']) < .000001
+                                    for other in known))
+            cached[number] = known
         self._show_sstv_frequencies(dial_before, cached, 'Checking SatNOGS DB…')
         def worker():
-            choices = {}
+            choices, global_status = self.sstv_frequencies.lookup_all(force=force)
             failures = []
             for number in tracked:
                 downlinks, status = self.sstv_frequencies.lookup(number, force=force)
-                choices[number] = downlinks
+                known = list(choices.get(number, []))
+                known.extend(item for item in downlinks
+                             if not any(abs(item['frequency_mhz'] - other['frequency_mhz']) < .000001
+                                        for other in known))
+                choices[number] = known
                 if 'unavailable' in status:
                     failures.append(number)
-            message = ('SatNOGS DB unavailable for ' + ', '.join(failures) + ' · cached data' if failures
-                       else 'SatNOGS DB · updated/cached')
+            message = (global_status if 'unavailable' in global_status else 'SatNOGS DB · updated/cached')
+            if failures:
+                message += ' · cached entries for ' + ', '.join(failures)
             self.device_results.put(('sstv_freq', (request, tracked, dial_before, choices, message)))
         threading.Thread(target=worker, daemon=True).start()
 
     def _show_sstv_frequencies(self, dial_before, choices_by_sat, status):
-        tracked = [str(item) for item in self.app.settings.get('tracked_satellites', ['25544'])]
+        catalog = {str(row['NORAD_CAT_ID']): row['OBJECT_NAME'] for row in self.app.catalog.entries()}
+        catalog['25544'] = self.app.selected_tle(catalog_number='25544')['name']
         active = str(self.app.settings.get('selected_satellite', '25544'))
         manual_frequencies = self.app.settings.get('manual_sstv_frequencies', {})
         rows = []
-        for number in tracked:
-            name = self.app.selected_tle(catalog_number=number)['name']
+        for number, name in catalog.items():
             for item in choices_by_sat.get(number, []):
                 rows.append({**item, 'satellite_id': number, 'satellite_name': name})
             try:
@@ -999,22 +1105,29 @@ class Desktop:
 
     def _display_sstv_rows(self, dial_before, status, auto_tune=True):
         self.sstv_lookup_status = status
+        query = self.sstv_satellite_search.get().strip().casefold()
+        rows = [item for item in self.sstv_all_rows if not query or
+                query in item['satellite_name'].casefold() or query in item['satellite_id'] or
+                query in f"{item['frequency_mhz']:.6f}"]
+        catalog = {str(item['NORAD_CAT_ID']): item['OBJECT_NAME'] for item in self.app.catalog.entries()}
+        catalog['25544'] = self.app.selected_tle(catalog_number='25544')['name']
+        if query:
+            missing = [(number, name) for number, name in catalog.items()
+                       if (query in name.casefold() or query in number) and
+                       not any(item['satellite_id'] == number for item in rows)]
+        else:
+            active = str(self.app.settings.get('selected_satellite', '25544'))
+            missing = ([(active, catalog[active])] if active in catalog and
+                       not any(item['satellite_id'] == active for item in rows) else [])
+        for number, name in missing:
+            rows.append({'satellite_id': number, 'satellite_name': name,
+                         'frequency_mhz': None,
+                         'description': 'No SSTV downlink listed; use manual frequency',
+                         'source': 'Unavailable'})
         tracked = [str(item) for item in self.app.settings.get('tracked_satellites', ['25544'])]
-        chosen = {tracked[index] for index in self.tracked_list.curselection() if index < len(tracked)}
-        visible_ids = [number for number in tracked if not chosen or number in chosen]
-        rows = []
-        for number in visible_ids:
-            listed = [item for item in self.sstv_all_rows if item['satellite_id'] == number]
-            if listed:
-                rows.extend(listed)
-            else:
-                description = ('Checking SatNOGS DB…' if status.startswith('Checking') else
-                               'No SSTV downlink cached; use manual frequency' if 'unavailable' in status else
-                               'No SSTV downlink listed; use manual frequency')
-                rows.append({'satellite_id': number,
-                             'satellite_name': self.app.selected_tle(catalog_number=number)['name'],
-                             'frequency_mhz': None, 'description': description,
-                             'source': 'Unavailable'})
+        order = {number: index for index, number in enumerate(tracked)}
+        rows.sort(key=lambda item: (order.get(item['satellite_id'], len(order)),
+                                    item['satellite_name'].casefold(), item['frequency_mhz'] or 0))
         self.sstv_rows = rows
         self.sstv_frequency_combo['values'] = [
             (f"{item['satellite_name']} · {item['frequency_mhz']:.6f} MHz · {item['description']}"
@@ -1023,7 +1136,7 @@ class Desktop:
             for item in rows]
         if not rows:
             self.sstv_frequency_combo.set('')
-            self.sstv_frequency_status.config(text=status + ' · no SSTV downlinks listed for selected satellites')
+            self.sstv_frequency_status.config(text=status + ' · no matching satellite or SSTV downlink')
             return
         active = str(self.app.settings.get('selected_satellite', '25544'))
         manual_frequencies = self.app.settings.get('manual_sstv_frequencies', {})
@@ -1053,7 +1166,7 @@ class Desktop:
                           abs(current - dial_before) < .000001)
         available = sum(item['frequency_mhz'] is not None for item in rows)
         self.sstv_frequency_status.config(text=status +
-            f" · {available} SSTV downlink(s) across {len(visible_ids)} selected satellite(s)" +
+            f" · {available} SSTV downlink(s) across {len({item['satellite_id'] for item in rows})} satellite(s)" +
             ('; choose a downlink to tune' if not dial_unchanged else ''))
         if (auto_tune and rows[selected]['frequency_mhz'] is not None and
                 rows[selected]['satellite_id'] == active and dial_unchanged and
@@ -1113,6 +1226,8 @@ class Desktop:
             self.app.auto_active_satellite = None
             self.app.auto_active_frequency_mhz = None
             tracked = self.app.settings.get('tracked_satellites', ['25544'])
+            if row['satellite_id'] not in [str(item) for item in tracked]:
+                tracked = [*tracked, row['satellite_id']]
             if row['satellite_id'] != str(self.app.settings.get('selected_satellite', '25544')):
                 self._set_tracked(tracked, row['satellite_id'], refresh_downlinks=False)
             target_index = [str(item) for item in tracked].index(row['satellite_id'])
@@ -1153,6 +1268,12 @@ class Desktop:
 
     def _load_settings(self):
         cfg = self.app.settings
+        self.band_plan = sstv_plan(cfg.get('bandplan_country', 'AU'), self.countries)
+        self.band_country_combo.set(self.band_plan['country']['name'])
+        self._update_band_plan_buttons()
+        language = cfg.get('language_code') or self.band_plan['country'].get('language', 'en')
+        self.ui_language = language if language in self.languages else 'en'
+        self.language_combo.set(self.languages[self.ui_language])
         if cfg.get('window_geometry'):
             self.root.geometry(cfg['window_geometry'])
         self.frequency.insert(0, str(cfg['frequency_mhz']))
@@ -1177,6 +1298,122 @@ class Desktop:
         self.monitor.set(bool(cfg.get('monitor_enabled')))
         self.volume.set(max(0, min(100, float(cfg.get('monitor_volume', 70)))))
         self.monitor_gain = self.volume.get() / 100
+
+    def _update_band_plan_buttons(self):
+        forty = self.band_plan['presets'][0]
+        twenty = self.band_plan['presets'][1]
+        self.hf_lsb_button.config(text=f'HF SSTV {forty[1]:.3f} {forty[2]}')
+        self.hf_usb_button.config(text=f'HF SSTV {twenty[1]:.3f} {twenty[2]}')
+
+    def _country_changed(self, _event=None):
+        code = self.country_names.get(self.band_country_combo.get(), 'AU')
+        self.band_plan = sstv_plan(code, self.countries)
+        language = self.band_plan['country'].get('language', 'en')
+        if language not in self.languages:
+            language = 'en'
+        with self.app.lock:
+            self.app.settings['bandplan_country'] = code
+            self.app.settings['language_code'] = language
+            write_settings(self.app.settings)
+        self._update_band_plan_buttons()
+        self._status(f"{self.band_plan['country']['name']} · {self.band_plan['source']} SSTV presets selected")
+        self._set_ui_language(language)
+
+    def _language_changed(self, _event=None):
+        language = self.language_names.get(self.language_combo.get(), 'en')
+        with self.app.lock:
+            self.app.settings['language_code'] = language
+            write_settings(self.app.settings)
+        self._set_ui_language(language)
+
+    def _set_ui_language(self, language):
+        self.ui_language = language
+        self.language_combo.set(self.languages.get(language, 'English'))
+        self._translate_ui_scan()
+
+    def _translate_ui_scan(self):
+        if self.translation_after_id is not None:
+            self.root.after_cancel(self.translation_after_id)
+            self.translation_after_id = None
+        language = self.ui_language
+        missing = set()
+        skip = {self.clock, self.spectrum_info, self.position_text, self.look_text,
+                self.doppler_text, self.tle_epoch_text, self.tle_status,
+                self.squelch_status, self.tune_detail, self.tuned, *self.pass_labels}
+        widgets = [self.root]
+        while widgets:
+            widget = widgets.pop()
+            widgets.extend(widget.winfo_children())
+            if isinstance(widget, ttk.Notebook):
+                for index in range(widget.index('end')):
+                    key = (widget, index)
+                    current = widget.tab(index, 'text')
+                    previous = self.ui_tab_state.get(key)
+                    original = previous[0] if previous and current == previous[1] else current
+                    translated = self.ui_translation.get(language, original)
+                    if translated and translated != current:
+                        widget.tab(index, text=translated)
+                    self.ui_tab_state[key] = (original, translated or current)
+                    if language != 'en' and not translated:
+                        missing.add(original)
+            if not isinstance(widget, (tk.Label, tk.Button, tk.Checkbutton)) or widget in skip:
+                continue
+            current = widget.cget('text')
+            if not current or len(current) > 300 or 'FUBAR\'S SSTV DECODER' in current:
+                continue
+            previous = self.ui_text_state.get(widget)
+            original = previous[0] if previous and current == previous[1] else current
+            if '\\' in original or 'https://' in original:
+                continue
+            translated = self.ui_translation.get(language, original)
+            if translated and translated != current:
+                widget.config(text=translated)
+            self.ui_text_state[widget] = (original, translated or current)
+            if language != 'en' and not translated:
+                missing.add(original)
+        self.ui_text_state = {widget: value for widget, value in self.ui_text_state.items()
+                              if widget.winfo_exists()}
+        self.ui_tab_state = {key: value for key, value in self.ui_tab_state.items()
+                             if key[0].winfo_exists()}
+        if missing and not self.translation_loading and time.monotonic() >= self.translation_retry_after:
+            self.translation_loading = True
+            def worker():
+                error = self.ui_translation.fetch(language, sorted(missing))
+                try:
+                    self.root.after(0, lambda: self._translation_done(language, error))
+                except (RuntimeError, tk.TclError):
+                    pass
+            threading.Thread(target=worker, daemon=True).start()
+        try:
+            self.translation_after_id = self.root.after(2500, self._translate_ui_scan)
+        except tk.TclError:
+            pass
+
+    def _translation_done(self, language, error):
+        self.translation_loading = False
+        self.translation_retry_after = time.monotonic() + 60 if error else 0.0
+        if language == self.ui_language:
+            if error:
+                self._status(f'Online translation unavailable; showing cached text: {error}')
+            self._translate_ui_scan()
+
+    def _open_band_plan(self):
+        plan = self.band_plan
+        window = tk.Toplevel(self.root)
+        window.title(f"SSTV band plan · {plan['country']['name']}")
+        window.configure(bg=PANEL)
+        window.geometry('390x295')
+        window.transient(self.root)
+        self._label(window, f"{plan['country']['name']} · IARU Region {plan['country']['region']}",
+                    GREEN, 12, True).pack(anchor='w', padx=16, pady=(14, 3))
+        self._label(window, f"Source: {plan['source']}", CYAN, 9).pack(anchor='w', padx=16)
+        for band, frequency, mode in plan['presets']:
+            self._button(window, f'{band}  ·  {frequency:.3f} MHz  ·  {mode}',
+                         lambda value=frequency, sideband=mode: (self.set_hf_preset(value, sideband),
+                                                                 window.destroy())).pack(fill='x', padx=16, pady=3)
+        self._button(window, 'OPEN SOURCE BAND PLAN', lambda: webbrowser.open(plan['url'])).pack(anchor='w', padx=16, pady=5)
+        self._label(window, 'Receiving reference; national allocations and licence conditions can differ.',
+                    MUTED, 8).pack(anchor='w', padx=16)
 
     def _set_monitor_volume(self, value):
         self.monitor_gain = float(value) / 100
@@ -2471,7 +2708,7 @@ class Desktop:
     def close(self):
         try:
             self.app.tracker_stopped = True
-            for after_id in (self.tick_after_id, self.restore_after_id):
+            for after_id in (self.tick_after_id, self.restore_after_id, self.translation_after_id):
                 if after_id is not None:
                     self.root.after_cancel(after_id)
             self.save_settings()

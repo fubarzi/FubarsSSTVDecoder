@@ -5,7 +5,7 @@
 [Setup]
 AppId={{39B1FD68-03EF-40C2-A88A-22ED5325A63F}
 AppName=Fubar's SSTV Decoder
-AppVersion=1.0.10
+AppVersion=1.0.11
 AppPublisher=Fubar's SSTV Decoder
 DefaultDirName={code:GetInstallDir}
 DefaultGroupName=Fubar's SSTV Decoder
@@ -35,7 +35,7 @@ Name: "vbcable"; Description: "VB-CABLE audio driver (opens VB-Audio setup)"; Ty
 Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Shortcuts:"; Flags: unchecked
 
 [Files]
-Source: "{#PackageDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "settings.json,FubarsSSTVDecoder.ini,iss.tle.json,satellites.json,sstv_frequencies.json,mmsstv_engine\sstveng.ini"; Components: fubars
+Source: "{#PackageDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "settings.json,FubarsSSTVDecoder.ini,iss.tle.json,satellites.json,satellites.manual.json,sstv_frequencies.json,sstv_frequencies_all.json,ui_translations.json,mmsstv_engine\sstveng.ini"; Components: fubars
 Source: "vendor\vb_cable\driver_pack\*"; DestDir: "{tmp}\FubarsVBCable"; Flags: ignoreversion recursesubdirs createallsubdirs deleteafterinstall; Components: vbcable
 
 [Icons]
@@ -67,7 +67,7 @@ var
 begin
   Result := FileExists(AddBackslash(WizardDirValue) + 'FubarsSSTVDecoder.exe') and
             LoadStringFromFile(AddBackslash(WizardDirValue) + 'VERSION.txt', InstalledVersion) and
-            (Trim(InstalledVersion) = '1.0.10');
+            (Trim(InstalledVersion) = '1.0.11');
 end;
 
 procedure CurPageChanged(CurPageID: Integer);
