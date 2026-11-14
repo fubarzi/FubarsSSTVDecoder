@@ -187,13 +187,18 @@ class StreamingHFDemodulator:
         self.mode = mode
         self.bandwidth_khz = float(bandwidth_khz)
         upper = max(2500.0, min(6000.0, self.bandwidth_khz * 1000))
-        rf_cutoff = min(self.sample_rate * .4, upper + 3000)
+        rf_cutoff = min(self.sample_rate * .4, upper + (2000 if mode == 'AM' else 3000))
         taps = 257
         offsets = np.arange(taps, dtype=np.float64) - (taps - 1) / 2
         kernel = 2 * rf_cutoff / self.sample_rate * np.sinc(2 * rf_cutoff / self.sample_rate * offsets)
         kernel *= np.hamming(taps)
         self.rf_kernel = (kernel / kernel.sum()).astype(np.float32)
-        if mode != 'AM':
+        if mode == 'AM':
+            offsets = np.arange(129, dtype=np.float64) - 64
+            kernel = 2 * upper / self.audio_rate * np.sinc(2 * upper / self.audio_rate * offsets)
+            kernel *= np.hamming(len(offsets))
+            self.audio_kernel = (kernel / kernel.sum()).astype(np.float32)
+        else:
             low = 200.0
             half_width = (upper - low) / 2
             center = (upper + low) / 2 * (1 if mode == 'USB' else -1)
@@ -211,6 +216,8 @@ class StreamingHFDemodulator:
         self.mixer_phase = 0.0
         self.sample_count = 0
         self.audio_dc = None
+        self.audio_history = (np.zeros(len(self.audio_kernel) - 1, dtype=np.float32)
+                              if self.mode == 'AM' else None)
         self.rms = None
 
     def process(self, iq):
@@ -238,6 +245,9 @@ class StreamingHFDemodulator:
                 fraction = 1 - math.exp(-len(audio) / (self.audio_rate * .1))
                 self.audio_dc += fraction * (average - self.audio_dc)
             audio -= self.audio_dc
+            joined = np.concatenate((self.audio_history, audio))
+            audio = np.convolve(joined, self.audio_kernel, mode='valid').astype(np.float32)
+            self.audio_history = joined[-len(self.audio_history):].copy()
         else:
             joined = np.concatenate((self.side_history, reduced))
             sideband = np.convolve(joined, self.side_kernel, mode='valid')

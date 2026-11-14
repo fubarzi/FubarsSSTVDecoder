@@ -2381,9 +2381,12 @@ class Desktop:
             power = np.abs(np.fft.fftshift(np.fft.fft(iq * window))) ** 2
             edges = np.linspace(0, n, width + 1, dtype=np.int32)
             binned = np.add.reduceat(power, edges[:-1]) / np.maximum(1, np.diff(edges))
+            peak_binned = np.maximum.reduceat(power, edges[:-1])
             db = 10 * np.log10(binned / window.sum() ** 2 + 1e-12)
+            peak_db = 10 * np.log10(peak_binned / window.sum() ** 2 + 1e-12)
             self.spectrum_ema = db if self.spectrum_ema is None else self.spectrum_ema * .72 + db * .28
-            self.spectrum_peak = db if self.spectrum_peak is None else np.maximum(db, self.spectrum_peak - .7)
+            self.spectrum_peak = (peak_db if self.spectrum_peak is None else
+                                  np.maximum(peak_db, self.spectrum_peak - .7))
             if waterfall_height >= 2:
                 self.waterfall_db[2:] = self.waterfall_db[:-2]
                 self.waterfall_db[:2] = db

@@ -555,6 +555,23 @@ def test_hf_sidebands_and_noise_filter():
     assert response(5000) < .02
 
 
+def test_airband_am_keeps_voice_and_rejects_hiss():
+    rate = 240000
+    samples = np.arange(rate // 4)
+    envelope = (1 + .2 * np.sin(2 * math.pi * 1000 * samples / rate) +
+                .2 * np.sin(2 * math.pi * 5000 * samples / rate))
+    iq = (envelope * np.exp(-2j * math.pi * 12000 * samples / rate)).astype(np.complex64)
+    demod = StreamingHFDemodulator(rate, 3, 'AM')
+    audio = np.concatenate([demod.process(iq[index:index + 16384])
+                            for index in range(0, len(iq), 16384)])[2400:]
+    frequencies = np.fft.rfftfreq(len(audio), 1 / demod.audio_rate)
+    spectrum = abs(np.fft.rfft(audio * np.hanning(len(audio))))
+    voice = spectrum[np.argmin(abs(frequencies - 1000))]
+    hiss = spectrum[np.argmin(abs(frequencies - 5000))]
+    assert voice > hiss * 10
+    assert np.sqrt(np.mean(audio * audio)) > .05
+
+
 def test_sdrplay_gain_direction():
     reductions = [sdrplay_if_reduction(value) for value in range(0, 51, 5)]
     assert reductions[0] == 59 and reductions[-1] == 20
@@ -691,6 +708,7 @@ if __name__ == '__main__':
     test_marker_tunes_with_fixed_spectrum_center()
     test_wfm_and_squelch()
     test_hf_sidebands_and_noise_filter()
+    test_airband_am_keeps_voice_and_rejects_hiss()
     test_sdrplay_gain_direction()
     test_hf_sstv_from_iq()
     test_wait_for_vis_and_manual_sync()
