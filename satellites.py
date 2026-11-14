@@ -46,20 +46,54 @@ def parse_tle_catalog(raw):
     return result
 
 
+def record_epoch(row):
+    """UTC epoch of an OMM or TLE record, for keeping the freshest orbit."""
+    try:
+        if row.get('EPOCH'):
+            epoch = datetime.fromisoformat(row['EPOCH'].replace('Z', '+00:00'))
+            return epoch if epoch.tzinfo else epoch.replace(tzinfo=timezone.utc)
+        line = row['lines'][0]
+        year = int(line[18:20])
+        year += 2000 if year < 57 else 1900
+        return datetime(year, 1, 1, tzinfo=timezone.utc) + timedelta(days=float(line[20:32]) - 1)
+    except (KeyError, IndexError, TypeError, ValueError):
+        return None
+
+
+def merge_latest(base, additions):
+    merged = base.copy()
+    for number, row in additions.items():
+        previous = merged.get(number)
+        old_epoch = record_epoch(previous) if previous else None
+        new_epoch = record_epoch(row)
+        if previous is None or old_epoch is None or (new_epoch is not None and new_epoch >= old_epoch):
+            merged[number] = row
+    return merged
+
+
 class SatelliteCatalog:
     def __init__(self, path: Path):
         self.path = path
         self.records = {}
+        self.defaults = {}
         self.checked_at = None
         self.status = 'Catalog not downloaded'
         try:
-            source = path if path.exists() else path.with_name('satellites.default.json')
-            saved = json.loads(source.read_text(encoding='utf-8'))
-            self.records = {str(row['NORAD_CAT_ID']): row for row in saved['records'] if valid_record(row)}
+            saved = json.loads(path.with_name('satellites.default.json').read_text(encoding='utf-8'))
+            self.defaults = {str(row['NORAD_CAT_ID']): row for row in saved['records'] if valid_record(row)}
+            self.records = self.defaults.copy()
             self.checked_at = datetime.fromisoformat(saved['checked_at'])
-            self.status = f'{len(self.records):,} amateur satellites cached'
         except (OSError, ValueError, KeyError, TypeError):
             pass
+        try:
+            saved = json.loads(path.read_text(encoding='utf-8'))
+            self.records = merge_latest(self.records, {
+                str(row['NORAD_CAT_ID']): row for row in saved['records'] if valid_record(row)})
+            self.checked_at = datetime.fromisoformat(saved['checked_at'])
+        except (OSError, ValueError, KeyError, TypeError):
+            pass
+        if self.records:
+            self.status = f'{len(self.records):,} amateur satellites cached'
 
     def entries(self):
         return sorted(self.records.values(), key=lambda row: (row['OBJECT_NAME'].casefold(), int(row['NORAD_CAT_ID'])))
@@ -101,6 +135,7 @@ class SatelliteCatalog:
             records = {str(row['NORAD_CAT_ID']): row for row in rows if valid_record(row)}
             if not records:
                 raise ValueError('No usable satellite records')
+            records = merge_latest(self.defaults, records)
             self.path.write_text(json.dumps({'checked_at': now.isoformat(), 'records': list(records.values())}),
                                  encoding='utf-8')
             self.records, self.checked_at = records, now
